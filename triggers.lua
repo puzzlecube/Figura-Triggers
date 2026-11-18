@@ -1,7 +1,7 @@
---[=====[ Triggers: Version 1.2.2 - License: Apache-2
+--[=====[ Triggers: Version 1.2.3 - License: Apache-2
    The Swiss Army Knife of performant, instruction-cheap fake events.
 
-   While triggers are meant to be as semantically equivalent to the EventsAPI as possible, some things do still differ. First of all, functions registered on triggers are not (currently) run in parallel like Event functions are. Triggers have a lot more methods than events to help make managing them much easier, however due to the need for this library to be as performant as poossible a lot of functions don't check early for errors and make heavy use of the Lua feature of elimenating tail calls. Thus error messages that many of these functions give are sometimes not the most informative. This is especially true for ephemeral triggers because they are designed to be ran in tight loops and don't check anything at all in order to save on instructions.
+   While triggers are meant to be as semantically equivalent to the EventsAPI as possible, some things do still differ. First of all, functions registered on triggers currently have an order which they run given by the order they are registered while event functions don't seem to have any order. Triggers have a lot more methods than events to help make managing them much easier, however due to the need for this library to be as performant as poossible a lot of functions don't check early for errors and make heavy use of the Lua feature of elimenating tail calls. Thus error messages that many of these functions give are sometimes not the most informative. This is especially true for ephemeral triggers because they are designed to be ran in tight loops and don't check anything at all in order to save on instructions.
    
    In addition, the major difference from events is that triggers do not support the behavior of being able to accept multiple registered functions with the same name. Doing this will error by default if the trigger does not have the override field set to true. If it does however, the new function will just replace the old function. This decision was chosen deliberately because it is usually, at least in my experience, a bug if two functions of the same name are registered on the same event and also disallowing that simplified implementation allowing for a bit more performance. Thus trigger:getRegisteredCount(name) will always return either 0 or 1.
 
@@ -14,7 +14,7 @@
    TODO:
    * Idle trigger improvements
    * More streamlined ways of doing time-sliced triggers, that only do certain things on each run.
-   * Find a way to gain the parallelism that events have.
+   * Ordered vs unordered triggers
    * Somehow make managing normal events easier
    * Split the library into the core library providing the API for managing triggers and the anselary library which depends on the core and provides the standard triggers so the core can be used with simpler scripts that don't use a bunch of the standard or if space is a concern.
    * Clean the mess of standard trigger code
@@ -411,7 +411,7 @@ function m.newSequence(name,event,predicate,final,starter,stopper)
 		 starter=start,
 		 stopper=stop,
 		 isDirect=true,
-		 alwaysRegistered=true})
+		 alwaysRegistered=true}),start,stop
 end
 
 -- Create a new trigger copying all data from a pre-existing trigger and overriding the specified fields.
@@ -528,7 +528,7 @@ local ephemerals = 0
 function m.onNext(event,func,name)
    ephemerals=ephemerals+1
    if not name then
-      name = 'ephemeral:'..client:generateUUID()
+      name = 'ephemeral:'..client:intUUIDToString(client.generateUUID())
    end
    return event:register(function(...)
 	 ephemerals=ephemerals-1
@@ -545,7 +545,7 @@ end
 function m.queueNext(event,funcs,name)
    ephemerals=ephemerals+1
    if not name then
-      name = 'ephemeral:'..client:generateUUID()
+      name = 'ephemeral:'..client:intUUIDToString(client.generateUUID())
    end
    local i,q = 1,#funcs
    -- Doing it such that the queue function unregisters itself one run after the last element helps make sure the instruction count doesn't slightly spike on the last invocation. Even if that is only about 2 instructions.
@@ -569,7 +569,7 @@ end
 function m.onNextUntil(event,func,ignoreNil,name)
    ephemerals=ephemerals+1
    if not name then
-      name = 'ephemeral:'..client:generateUUID()
+      name = 'ephemeral:'..client:intUUIDToString(client.generateUUID())
    end
    if not ignoreNil then
       return event:register(function(...)
@@ -599,7 +599,7 @@ end
 function m.whenNext(event,pred,func,withResult,name)
    ephemerals=ephemerals+1
    if not name then
-      name = 'ephemeral:'..client:generateUUID()
+      name = 'ephemeral:'..client:intUUIDToString(client.generateUUID())
    end
    if withResult then
       return event:register(function(...)
@@ -622,6 +622,29 @@ function m.whenNext(event,pred,func,withResult,name)
    end
 end
 
+-- Run this function for the next n instances of the event or trigger. The timer is passed as the first argument of the function.
+--@param n number
+--@param event Event|Trigger
+--@param func function(timer: number,...)
+--@param name string?
+function m.forTheNext(n,event,func,name)
+   if not name then
+      name = 'ephemeral:'..client:intUUIDToString(client.generateUUID())
+   end
+   local i = 1
+   ephemerals=ephemerals+1
+   return event:register(function(...)
+	 if i == n then
+	    ephemerals=ephemerals-1
+	    event:remove(name)
+	    return func(n,...)
+	 end
+	 i=i+1
+	 return func(i,...)
+   end,name)
+end
+   
+
 -- Run the given function on the next time the event is called after the timer reaches zero
 --@param event Event
 --@param delay number
@@ -633,7 +656,7 @@ function m.onNextAfter(event,delay,func,name)
       end]]
    ephemerals=ephemerals+1
    if not name then
-      name = 'ephemeral:'..client:generateUUID()
+      name = 'ephemeral:'..client:intUUIDToString(client.generateUUID())
    end
    return event:register(function(...)
 	 if delay > 0 then
@@ -721,7 +744,7 @@ local standardTriggers = {
 			      if ctx == 'FIRST_PERSON' or ctx == 'OTHER' then return end
 			      return {d,ctx,mat}
    end},
-   -- This one is special because it will render for your avatar only once. If this is the host it renders in FIRST_PERSON, otherwise in RENDER.
+   -- This one is special because it will render for your avatar only once per frame. If this is the host it renders in FIRST_PERSON, otherwise in RENDER.
    AVATAR_RENDER = {events.RENDER},
    -- Ran while not moving
    IDLE = {events.TICK, function(self,time)
@@ -736,7 +759,6 @@ local standardTriggers = {
 	      return {t}
    end, {time=0}},
    -- The fact that since these can each be set up independently is mildly unfortunate maintenance wise
-   
    DISMOUNT = {events.TICK, function(self)
 		  local v = player:getVehicle()
 		  if v then
@@ -808,18 +830,25 @@ local standardTriggers = {
 
 if hostp then
    standardTriggers.AVATAR_RENDER[2] = function(self,d,ctx,mat)
-      if ctx == 'FIRST_PERSON' or ctx == 'RENDER' then
-	 return {d,ctx,mat}
+      --if ctx == 'FIRST_PERSON' or ctx == 'RENDER' then
+      if d ~= self.lastdelta then
+	 --return {d,ctx,mat}
+	 return self:run(d,ctx,mat)
       end
       return
    end
+   standardTriggers.AVATAR_RENDER[3] = function(self,d)
+      self.lastdelta = d
+   end
+   standardTriggers.AVATAR_RENDER[3]={lastdelta=-1,isDirect=true}
 else
+   -- It is fine to assume non-host should only render this in RENDER context because this is 1 instruction cheaper
    standardTriggers.AVATAR_RENDER[2] = function(self,d,ctx,mat)
       if ctx ~= 'RENDER' then return end
       return {d,false,mat}
    end
+   standardTriggers.AVATAR_RENDER[3]={lastdelta=0}
 end
---standardTriggers.AVATAR_RENDER[3]={isDirect=true}
    
 -- Create render and post_render triggers for every individual context. Also IN_WORLD is named such that it does not semantically conflict with WORLD_RENDER. Not yet sure how they interract or if events.RENDER actually runs in that context. TODO: Cut out shader render and find a way to get the client to tell Figura what mod (and shader) is running it
 for name,mode in pairs({FIRST_PERSON='FIRST_PERSON',THIRD_PERSON='RENDER',FIGURA='FIGURA_GUI',UI='MINECRAFT_GUI',PAPERDOLL='PAPERDOLL',WORLD_FIRST_PERSON='FIRST_PERSON_WORLD',IN_WORLD='WORLD',SHADER='OTHER'}) do

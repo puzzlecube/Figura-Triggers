@@ -1,7 +1,7 @@
 Triggers: Version 1.2.2 - License: Apache-2
 The Swiss Army Knife of performant, instruction-cheap fake events that can be used for pretty much anything!
 
-While triggers are meant to be as semantically equivalent to the EventsAPI as possible, some things do still differ. First of all, functions registered on triggers are not (currently) run in parallel like Event functions are. Triggers have a lot more methods than events to help make managing them much easier, however due to the need for this library to be as performant as poossible a lot of functions don't check early for errors and make heavy use of the Lua feature of elimenating tail calls. Thus error messages that many of these functions give are sometimes not the most informative. This is especially true for ephemeral triggers because they are designed to be ran in tight loops and don't check hardly anything at all in order to save on instructions.
+While triggers are meant to be as semantically equivalent to the EventsAPI as possible, some things do still differ. First of all, functions registered on triggers currently have an order which they run given by the order they are registered while event functions don't seem to have any order. Triggers have a lot more methods than events to help make managing them much easier, however due to the need for this library to be as performant as poossible a lot of functions don't check early for errors and make heavy use of the Lua feature of elimenating tail calls. Thus error messages that many of these functions give are sometimes not the most informative. This is especially true for ephemeral triggers because they are designed to be ran in tight loops and don't check hardly anything at all in order to save on instructions.
    
 In addition, the major difference from events is that triggers do not support the behavior of being able to accept multiple registered functions with the same name. Doing this will error by default if the trigger does not have the override field set to true. If it does however, the new function will just replace the old function. This decision was chosen deliberately because it is usually, at least in my experience, a bug if two functions of the same name are registered on the same event and also disallowing that simplified implementation allowing for a bit more performance. Thus trigger:getRegisteredCount(name) will always return either 0 or 1.
 
@@ -14,7 +14,7 @@ All triggers can have their functions managed similarly to events. For example r
 TODO:
    * Idle trigger improvements
    * More streamlined ways of doing time-sliced triggers, that only do certain things on each run.
-   * Find a way to gain the parallelism that events have.
+   * Ordered verseus unordered triggers
    * Somehow make managing normal events easier
    * Split the library into the core library providing the API for managing triggers and the anselary library which depends on the core and provides the standard triggers so the core can be used with simpler scripts that don't use a bunch of the standard or if space is a concern.
    * Clean the mess of standard trigger code
